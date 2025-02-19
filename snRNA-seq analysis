@@ -1,1 +1,48 @@
+############ snRNA-seq analysis
 
+##### Cellranger-arc count(parameters: localcores=14, localmem=64, chemistry ARC-v1)
+
+##### merge data from 6 time points' data
+
+##### Seurat analysis
+
+monkey2_counts1 <- Read10X('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741A_1115M_D0_ARC/outs/filtered_feature_bc_matrix',gene.column = 2)
+monkey2_counts2 <- Read10X('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741B_1118M_D3_ARC/outs/filtered_feature_bc_matrix',gene.column = 2)
+monkey2_counts3 <- Read10X('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741C_1124M_D9_ARC/outs/filtered_feature_bc_matrix',gene.column = 2)
+monkey2_counts4 <- Read10X('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741D_1204M_D19_ARC/outs/filtered_feature_bc_matrix',gene.column = 2)
+monkey2_counts5 <- Read10X('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741E_20221223_D30_ARC/outs/filtered_feature_bc_matrix',gene.column = 2)
+monkey2_counts6 <- Read10X('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741F_14C02759_D60_ARC/outs/filtered_feature_bc_matrix',gene.column = 2)
+
+monkey2_rna1 <- CreateSeuratObject(counts = monkey2_counts1$`Gene Expression`,assay = "RNA",min.cells=3)
+monkey2_rna2 <- CreateSeuratObject(counts = monkey2_counts2$`Gene Expression`,assay = "RNA",min.cells=3)
+monkey2_rna3 <- CreateSeuratObject(counts = monkey2_counts3$`Gene Expression`,assay = "RNA",min.cells=3)
+monkey2_rna4 <- CreateSeuratObject(counts = monkey2_counts4$`Gene Expression`,assay = "RNA",min.cells=3)
+monkey2_rna5 <- CreateSeuratObject(counts = monkey2_counts5$`Gene Expression`,assay = "RNA",min.cells=3)
+monkey2_rna6 <- CreateSeuratObject(counts = monkey2_counts6$`Gene Expression`,assay = "RNA",min.cells=3)
+
+raw_combine <- merge(monkey2_rna1,list(monkey2_rna2,monkey2_rna3,monkey2_rna4,monkey2_rna5,monkey2_rna6))
+raw_combine1 <- subset(raw_combine,subset = percent.rb < 20 & percent.HB<20 & percent.mito< 40 & nCount_RNA> 600 & nFeature_RNA>200)
+
+monkey2_rna <- raw_combine1
+DefaultAssay(monkey2_rna)='RNA'
+monkey2_rna <- NormalizeData(monkey2_rna,normalization.method = "LogNormalize",scale.factor = 1e4, assay="RNA")
+monkey2_rna <- FindVariableFeatures(monkey2_rna, selection.method = "vst",nfeatures=2000, assay="RNA")
+monkey2_rna <- ScaleData(monkey2_rna, features = VariableFeatures(monkey2_rna),split.by = "sample", do.center = FALSE)
+monkey2_rna <- RunPCA(monkey2_rna,verbose=FALSE)
+monkey2_rna <- RunHarmony(monkey2_rna,group.by.vars="sample", plot_convergence = TRUE)
+plot2 <- ElbowPlot(monkey2_rna, ndims=50, reduction="pca")
+pc.nums=1:30
+monkey2_rna <- RunUMAP(monkey2_rna,dims=pc.nums,reduction='harmony')
+monkey2_rna_harmony_embeddings <- Embeddings(monkey2_rna, 'harmony')
+monkey2_rna <- FindNeighbors(monkey2_rna, dims = pc.nums,reduction='harmony')
+ronkey2_rna <- FindClusters(monkey2_rna, resolution = c(seq(0,1,.05)))
+plot1 <- DimPlot(monkey2_rna,group.by='annot',reduction = "umap",label= TRUE)
+plot4 <- DimPlot(monkey2_rna,group.by='sample',reduction = "umap",label= TRUE,split.by='sample')
+
+# annotation markers:
+hepa_markers <- c('ALB','HNF4A','APOC2','LGR5','AFP','G6PC','TF','TTR')
+cho_markers <- c('SCTR','CFTR','SOX9','HNF1B','KRT7','ANXA4')
+endo_markers <- c('FLT1','YES1','OIT3','PTPRB','F8','NOSTRIN','AKAP12','LDB2','DNASE1L3')
+stellate_markers <- c('PDGFRA','DCN','COL1A2','COL3A1','COL5A1','COL5A2')
+kupper_markers <- c('CD5L','MYOF','VSIG4','ITGAM','CD163L1','CD163','MARCO')
+t_markers <- c('CD96','KLRB1','IL12RB2','IL7R','CLEC2D','CD7')
