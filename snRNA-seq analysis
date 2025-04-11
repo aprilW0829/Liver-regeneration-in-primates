@@ -5,7 +5,7 @@
 ##### merge data from 6 time points' data
 
 ##### Seurat analysis
-
+## read data
 monkey2_counts1 <- Read10X('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741A_1115M_D0_ARC/outs/filtered_feature_bc_matrix',gene.column = 2)
 monkey2_counts2 <- Read10X('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741B_1118M_D3_ARC/outs/filtered_feature_bc_matrix',gene.column = 2)
 monkey2_counts3 <- Read10X('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741C_1124M_D9_ARC/outs/filtered_feature_bc_matrix',gene.column = 2)
@@ -23,6 +23,7 @@ monkey2_rna6 <- CreateSeuratObject(counts = monkey2_counts6$`Gene Expression`,as
 raw_combine <- merge(monkey2_rna1,list(monkey2_rna2,monkey2_rna3,monkey2_rna4,monkey2_rna5,monkey2_rna6))
 raw_combine1 <- subset(raw_combine,subset = percent.rb < 20 & percent.HB<20 & percent.mito< 40 & nCount_RNA> 600 & nFeature_RNA>200)
 
+# seurat analysis
 monkey2_rna <- raw_combine1
 DefaultAssay(monkey2_rna)='RNA'
 monkey2_rna <- NormalizeData(monkey2_rna,normalization.method = "LogNormalize",scale.factor = 1e4, assay="RNA")
@@ -39,6 +40,7 @@ ronkey2_rna <- FindClusters(monkey2_rna, resolution = c(seq(0,1,.05)))
 plot1 <- DimPlot(monkey2_rna,group.by='annot',reduction = "umap",label= TRUE)
 plot4 <- DimPlot(monkey2_rna,group.by='sample',reduction = "umap",label= TRUE,split.by='sample')
 
+# cell types' annotation
 # annotation markers:
 hepa_markers <- c('ALB','HNF4A','APOC2','LGR5','AFP','G6PC','TF','TTR')
 cho_markers <- c('SCTR','CFTR','SOX9','HNF1B','KRT7','ANXA4')
