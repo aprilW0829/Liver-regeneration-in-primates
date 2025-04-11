@@ -1,1 +1,179 @@
+####  Stereo Cell analysis
 
+import pandas as pd
+import numpy as np
+import os
+import sys
+import scanpy as sc
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+###### run Stereo cell
+sys.path.append('../stereocell/labelling')
+import correct
+mask_path = 'A01189A6_mask_1.tif'
+matrix_path = 'A01189A6.tissue.gem.gz'
+out_path = 'Res_StereoCell'
+correct.adjust('fast', mask_path, matrix_path, out_path, radius=50, process=10, threshold=20)
+
+#### get Cell_location.txt
+Count_df = pd.read_csv('Res_StereoCell/fast_data_adjust.txt', sep='\t')
+Count_df = Count_df.loc[Count_df['CellID']!=0, ]
+Count_df = Count_df.loc[:, ['x', 'y', 'CellID']]
+Count_df = Count_df.drop_duplicates()
+zs = Count_df.groupby('CellID')
+a = zs.mean()
+a['x'] = a['x'].map(int)
+a['y'] = a['y'].map(int)
+a['Name'] = a.apply(lambda x: 'R'+str(x['x'])+'_'+str(x['y']), axis=1)
+pd.value_counts(a['Name'])
+a.to_csv('Cell_Location.txt', sep='\t')
+
+#### get split_spatial_spot_information.txt
+Count_df = pd.read_csv('Res_StereoCell/fast_data_adjust.txt', sep='\t')
+Count_df = Count_df.loc[Count_df['CellID']!=0, ]
+Name_trans = dict(zip(Cell_Location['CellID'], Cell_Location['Name']))
+Count_df['Spot'] = Count_df['CellID'].map(Name_trans)
+np.sum(Count_df['Spot'].isnull())
+genes = np.unique(Count_df['geneID'])
+spots = np.unique(Count_df['Spot'])
+gene_dict = dict(zip(genes, range(1, genes.shape[0]+1)))
+spot_dict = dict(zip(spots, range(1, spots.shape[0]+1)))
+Count_df['geneID'] = Count_df['geneID'].map(gene_dict)
+Count_df['spot'] = Count_df['Spot'].map(spot_dict)
+
+Count_df.to_csv('Res_StereoCell/Seg_Count_df.txt', sep='\t', index=None)
+pd.DataFrame(genes).to_csv('Res_StereoCell/Seg_Gene.txt', sep='\t', index=None, header=None)
+pd.DataFrame(spots).to_csv('Res_StereoCell/Seg_Spot.txt', sep='\t', index=None, header=None)
+
+
+
+###### Run STAGATE
+import scipy.sparse
+import torch
+import STAGATE_pyG
+torch.cuda.is_available()
+
+### Load data
+adata = sc.read('./StereoCell/adata_StereoCell_A01189A6.h5ad')
+plt.rcParams["figure.figsize"] = (6, 6)
+sc.pl.embedding(adata, basis="spatial", color="log1p_total_counts",s=6, show=False, vmax='p99')
+plt.title('')
+plt.axis('off')
+plt.savefig('A6_StereoCell_log.png', dpi=300, bbox_inches='tight')
+
+### filtering and normalization
+sc.pp.filter_genes(adata, min_cells=50)
+print('After flitering: ', adata.shape)
+sc.pp.highly_variable_genes(adata, flavor="seurat_v3", n_top_genes=2000)
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+STAGATE_pyG.Cal_Spatial_Net(adata, rad_cutoff=60)
+STAGATE_pyG.Stats_Spatial_Net(adata)
+
+### Run STAGATE
+adata = STAGATE_pyG.train_STAGATE(adata, device = torch.device('cpu'), n_epochs=500)
+adata.write('STAGATE_A6_R60.h5ad')
+
+sc.pp.neighbors(adata, use_rep='STAGATE')
+sc.tl.umap(adata)
+sc.tl.louvain(adata, resolution=0.5)
+plt.rcParams["figure.figsize"] = (3, 3)
+sc.pl.embedding(adata, basis="spatial", color="louvain",s=3, show=False, title='STAGATE')
+plt.axis('off')
+plt.rcParams["figure.figsize"] = (3, 3)
+sc.pl.umap(adata, color='louvain')
+adata.write('STAGATE_Seg_R50.h5ad')
+
+plt.rcParams["figure.figsize"] = (3, 3)
+sc.pl.umap(adata, color='total_counts', vmax='p99')
+sc.tl.louvain(adata)
+
+sc.tl.rank_genes_groups(adata, 'louvain', method='t-test')
+sc.pl.rank_genes_groups(adata, n_genes=25, sharey=False)
+pd.DataFrame(adata.uns['rank_genes_groups']['names']).head(15)
+
+plt.rcParams["figure.figsize"] = (3, 3)
+sc.pl.embedding(adata, basis="spatial", color="FOSB",s=6, show=False, title='STAGATE', vmax='p99')
+plt.axis('off')
+
+
+
+##### Run Tangram (deconvolution)
+### 
+import tangram as tg
+import torch
+torch.cuda.set_device('cuda:3')
+# load data
+ad_sc = sc.read('monkey2_rna2_sc.h5ad')
+ad_sc.X.max()
+pd.value_counts(ad_sc.obs['Annotation'])
+ad_sp = sc.read('./StereoCell//adata_StereoCell_D01366D1.h5ad')
+sc.pp.filter_cells(ad_sp, min_genes=50)
+print('After flitering: ', ad_sp.shape)
+print(ad_sc.shape)
+print(ad_sp.shape)
+Overlap_gene = np.intersect1d(ad_sc.var_names, ad_sp.var_names)
+print(Overlap_gene.shape)
+ad_sc = ad_sc[:,Overlap_gene]
+print(ad_sc.shape)
+ad_sp = ad_sp[:,Overlap_gene]
+print(ad_sp.shape)
+pd.value_counts(ad_sc.obs['Annotation'])
+
+fig, axs = plt.subplots(1, 2, figsize=(20, 5))
+sc.pl.spatial(
+    adata_st, color="", alpha=0.7, frameon=False, show=False, ax=axs[0]
+)
+sc.pl.umap(
+    adata_sc, color="cell_subclass", size=10, frameon=False, show=False, ax=axs[1]
+)
+plt.tight_layout()
+
+# Run Tangram
+sc.tl.rank_genes_groups(ad_sc2, groupby='zone_anno', use_raw=False)
+markers_df2 = pd.DataFrame(ad_sc.uns["rank_genes_groups"]["names"]).iloc[0:100, :]
+markers2 = list(np.unique(markers_df2.melt().value.values))
+print(len(markers2))
+
+ad_map = tg.map_cells_to_space(
+                   ad_sc, 
+                   ad_sp,         
+                   mode='clusters',
+                   cluster_label='test_anno_sub')
+
+tg.project_cell_annotations(ad_map, ad_sp, annotation="test_anno_sub")
+ad_sp.obsm['tangram_ct_pred'].head()
+annotation_list = list(pd.unique(ad_sc.obs['test_anno_sub']))
+tg.plot_cell_annotation_sc(ad_sp, annotation_list,perc=0.02)
+
+tg.plot_training_scores(ad_map, bins=20, alpha=.5)
+plt.savefig('d3_zone_anno_allgenes_training_score.pdf')
+plt.clf()
+
+ad_ge = tg.project_genes(
+                  ad_map, 
+                  ad_sc,
+                  cluster_label='zone_anno')
+
+ad_ge1.write('./Tangram/d3_zone_anno_ad_ge.h5ad')
+ad_map1.write('./Tangram/d3_zone_anno_ad_map.h5ad')
+ad_sp1.write('./Tangram/d3_zone_anno_ad_sp.h5ad')
+
+Res = pd.DataFrame(ad_map.X, index=ad_map.obs['zone_anno'], columns=ad_map1.var_names).T
+Res.to_csv('./Tangram/d3_test_anno_sub_Tangram_res.txt',sep='\t')
+
+for it in Res.columns:
+    ad_sp.obs[it] = Res.loc[ad_sp.obproject_cell_annotation_names, it]
+
+#plt.rcParams["figure.figsize"] = (4, 4)
+#sc.pl.embedding(ad_sp, basis="spatial", color='other',s=6, show=False, vmax='p99')
+#plt.title('other')
+#plt.axis('off')
+#plt.savefig('./Tangram/d3_other_allgenes_traning_embedding.pdf')
+#plt.clf()
+
+#plt.rcParams["figure.figsize"] = (4, 4)
+#sc.pl.embedding(ad_sp, basis="spatial", color="cholangiocyte",s=6, show=False, vmax='p99')
+#plt.title('')
+#plt.axis('off')
