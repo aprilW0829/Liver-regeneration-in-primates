@@ -1,1 +1,129 @@
+### load packages
+library(Signac)
+library(Seurat)
+library(GenomeInfoDb)
+#library(EnsDb.Hsapiens.v75)
+library(ggplot2)
+library(patchwork)
+library(tidyverse)
+#library(SingleR)
+library(rtracklayer)
+library(BSgenome.Mmulatta.UCSC.rheMac10)
+str(BSgenome.Mmulatta.UCSC.rheMac10)
+
+samples <- ['D0','D3','D9','D19','D38','D125']
+
+### load data
+liver_counts_time1 <- Read10X_h5('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741A_1115M_D0_ARC/outs/filtered_feature_bc_matrix.h5')
+liver_fragpath_time1 <- '/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741A_1115M_D0_ARC/outs/atac_fragments.tsv.gz'
+liver_counts_time2 <- Read10X_h5('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741B_1118M_D3_ARC/outs/filtered_feature_bc_matrix.h5')
+liver_fragpath_time2 <- '/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741B_1118M_D3_ARC/outs/atac_fragments.tsv.gz'
+liver_counts_time3 <- Read10X_h5('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741C_1124M_D9_ARC/outs/filtered_feature_bc_matrix.h5')
+liver_fragpath_time3 <- '/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741C_1124M_D9_ARC/outs/atac_fragments.tsv.gz'
+liver_counts_time4 <- Read10X_h5('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741D_1204M_D19_ARC/outs/filtered_feature_bc_matrix.h5')
+liver_fragpath_time4 <- '/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741D_1204M_D19_ARC/outs/atac_fragments.tsv.gz'
+liver_counts_time5 <- Read10X_h5('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741E_20221223_D30_ARC/outs/filtered_feature_bc_matrix.h5')
+liver_fragpath_time5 <- '/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741E_20221223_D30_ARC/outs/atac_fragments.tsv.gz
+liver_counts_time6 <- Read10X_h5('/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741F_14C02759_D60_ARC/outs/filtered_feature_bc_matrix.h5')
+liver_fragpath_time6 <- '/data5/wangxin/20220411monkey_liver/sc/cellranger1/monkey2/220741F_14C02759_D60_ARC/outs/atac_fragments.tsv.gz'
+
+liver_counts_times_list <- list(liver_counts_time1, liver_counts_time2, liver_counts_time3, liver_counts_time4, liver_counts_time5, liver_counts_time6)
+liver_fragpath_times_list <- list(liver_fragpath_time1, liver_fragpath_time2, liver_fragpath_time3, liver_fragpath_time4, liver_fragpath_time5, liver_fragpath_time6)
+
+### load annotation file (gtf)
+gtf <- rtracklayer::import('/data2/wangxin/database/genome/Macaca_mulatta.Mmul_10.105_chrname.gtf'
+#查看seurat对象中的形式，是改成UCSC还是NCBI形式
+seqlevelsStyle(gtf) <- 'UCSC'
+#seqlevelsStyle(gtf) <- 'NCBI'
+gtf <- keepStandardChromosomes(gtf, pruning.mode = 'coarse')
+gtf$tx_id <-gtf$transcript_id
+gtf <- dropSeqlevels(gtf, "chrM", pruning.mode = "coarse")
+
+######## create seurat combining ATAC and RNA by different samples
+rna_atac_merge_list <- list()
+
+for (i in 1:6){
+# create a Seurat object containing the RNA adata
+small_merge <- CreateSeuratObject(
+  counts = liver_counts_times_list[[i]]$`Gene Expression`,
+  assay = "RNA")
+# create ATAC assay and add it to the object
+#如果注释不一致，可以在这里染色质开放性评估中使用共有的染色体，以便后期与BSgenome一致
+small_merge[["ATAC"]] <- CreateChromatinAssay(
+  counts = liver_counts_times_list[[i]]$Peaks,
+  sep = c(":", "-"),
+  fragments = liver_fragpath_times_list[[i]],
+  annotation = gtf)
+dim(small_merge)
+rna_atac_merge_list[[i]] <- small_merge
+}
+
+for (i in 1:6){
+small_merge <- rna_atac_merge_list[[i]]
+small_megre$sample <- samples[[i]]
+DefaultAssay(small_merge) <- "ATAC"
+small_merge <- NucleosomeSignal(small_merge)
+small_merge <- TSSEnrichment(small_merge)
+rna_atac_merge_list[[i]] <- small_merge
+}
+
+# Add QC information
+gene_QC <- function(uterus) {
+    mt.genes <- rownames(uterus)[grep("^MT",rownames(uterus), ignore.case=TRUE)]
+    percent.mito <- Matrix::colSums(uterus@assays$RNA@counts[mt.genes,])/Matrix::colSums(uterus@assays$RNA@counts)*100
+    uterus[["percent.mito"]] <- percent.mito
+    rb.genes <- rownames(uterus)[grep("^RP[SL]",rownames(uterus), ignore.case=TRUE)]
+    percent.rb <- Matrix::colSums(uterus@assays$RNA@counts[rb.genes,])/Matrix::colSums(uterus@assays$RNA@counts)*100
+    uterus[["percent.rb"]] <- percent.rb
+    HB.genes <- c("HBA1","HBA2","HBB","HBD","HBE1","HBG1","HBG2","HBM","HBQ1","HBZ") #for human
+    # sce=PercentageFeatureSet(sce, "^HB[^(P)]", col.name = "percent_hb")
+    #HB.genes <- c('Hbb-bt','Hbb-b1','Hbb-bs','Hbb-bh2','Hbb-bh1','Hbb-y','Hba-x','Hba-a1','Hbq1b','Hba-a2','Hbq1a') #for mouse
+    HB.genes <- CaseMatch(HB.genes, rownames(uterus))
+    uterus[["percent.HB"]]<-PercentageFeatureSet(uterus, features=HB.genes)
+    return (uterus)
+}
+
+# QC based on RNA data
+for (i in 1:6){
+small_merge <- rna_atac_merge_list[[i]]
+DefaultAssay(small_megre) <- 'RNA'
+small_merge <- gene_QC(small_megre)
+small_merge@meta.data$barcode <- rownames(small_merge@meta.data)
+small_merge@meta.data$new_barcode <- paste0(small_merge$barcode,'_', small_merge$sample)
+small_merge <- RenameCells(small_merge, new.names = small_merge@meta.data$new_barcode, for.merge = FALSE)
+rna_atac_merge_list[[i]] <- small_merge
+}
+
+# QC based on QC parameters
+rna_atac_merge_qc_list <- list()
+for (i in 1:6){
+small_megre <- rna_atac_merge_list[[i]]
+DefaultAssay(small_merge) <- 'RNA'
+small_filter_merge <- subset(small_merge, subset = percent.rb < 1 & percent.HB<1 & percent.mito< 20 & percent.rb< 1 & nCount_RNA> 800 & nFeature_RNA>500)
+rna_atac_merge_qc_list[[i]] <- small_filter_merge
+}
+
+# Call peakes used MACS2 in Signac
+samples_peaks_list <- list()
+for (i in 1:6){
+DefaultAssay(rna_atac_merge_qc_list[[i]]) <- 'ATAC'
+samples_peaks_list[[i]] <- CallPeaks(liver_merge_qc_list[[i]], macs2.path = "/home/wangxin/miniconda3/envs/signac/bin/macs2")
+# remove peaks on nonstandard chromosomes and in genomic blacklist region
+peaks[[i]] <- keepStandardChromosomes(peaks[[i]], pruning.mode = "coarse")
+#liver_peaks <- subsetByOverlaps(x = liver_peaks, ranges = blacklist_hg38_unified, invert = TRUE)
+# quantify counts in each peak
+liver_merge_macs2_counts[[i]] <- FeatureMatrix(
+  fragments = Fragments(liver_merge_qc_list[[i]]),
+  features = peaks[[i]],
+  cells = colnames(liver_merge_qc_list[[i]]))
+# create a new assay using the MACS2 peak set and add it to the Seurat object
+liver_merge_qc_list[[i]][["peaks"]] <- CreateChromatinAssay(
+  counts = liver_merge_macs2_counts[[i]],
+  fragments = liver_fragpath_list[[i]],
+  annotation = gtf)
+ print(i)
+ }
+
+
+
 
