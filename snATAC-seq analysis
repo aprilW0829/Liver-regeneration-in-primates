@@ -125,5 +125,16 @@ liver_merge_qc_list[[i]][["peaks"]] <- CreateChromatinAssay(
  }
 
 
+### Reduce dimensions analysis using Signac and integration
+atac_merge <- Reduce(merge,liver_merge_qc_list)
+atac_merge <- FindTopFeatures(atac_merge, min.cutoff = 10)
+atac_merge <- RunTFIDF(atac_merge)
+atac_merge <- RunSVD(atac_merge)
+atac_merge <- RunUMAP(atac_merge, reduction = "lsi", dims = 2:30)
+p1 <- DimPlot(atac_merge,group.by='sample',reduction='umap')
+integrated <- RunUMAP(integrated, dims = 2:30, reduction = 'harmony')
+integrated <- FindNeighbors(object = integrated, reduction = 'lsi', dims = 2:30)
+integrated <- FindClusters(object = integrated, verbose = FALSE, resolution = c(seq(0,1,.05)),algorithm = 3)
+p1 <- DimPlot(integrated, label = TRUE) + NoLegend()
 
 
