@@ -1,1 +1,130 @@
+################################################# 肝细胞亚分群
+hepa_list <- list()
+for (i in 1:6){
+small_seurat <- subset(scRNAlist[[i]],test_anno=='hepatocyte')
+hepa_list[[i]] <- small_seurat
+}
+hepa_list <- lapply(hepa_list, FUN = function(x) NormalizeData(x))
+hepa_list <- lapply(hepa_list, FUN = function(x) FindVariableFeatures(x))
+hepa <- ScaleData(hepa, features = rownames(hepa))
+#hepa <- RunPCA(hepa, npcs = 50, verbose = FALSE,features=VariableFeatures(object=hepa))
+hepa <- RunFastMNN(object.list=hepa_list)
+hepa <- FindNeighbors(hepa,reduction='mnn', dims = 1:30)
+hepa <- FindClusters(hepa, resolution = c(seq(0,0.5,.05)))
+hepa <- RunUMAP(hepa, reduction='mnn',dims = 1:30)
+
+
+################################################# 肝细胞分区推断
+#读取这33+58基因list
+# PC genes: Abcb4, Abcb6, Abcc2, Adh1, Akr1c20, Aqp9, Avpr1a, C130074G19Rik, Ces2e, Cyp2a5, Cyp2d40, Cyp2e1, Entpd5, Fam25c, Gstm3, Gstm6, Gulo, Hnf4a, Igfbp1, Lect2, Lrg1, Pcsk6, Pdzk1, Pfkfb1, Slc19a2, Slc22a1, Slc22a18, Slc25a10, Spp2, Ugdh, Ugt2b34, Ugt2b35, Vnn3
+# PP genes: Abcb11, Agxt, Aldh1b1, Aldh1l1, Aldh8a1, Aldob, Amdhd1, Aox3, Arg1, Aspg, Ass1, Bhmt, C8a, C8g, C9, Car14, Cbs, Ces3b, Cps1, Cth, Cyp2f2, Cyp2j5, Fbp1, Ftcd, G6pc, Gjb2, Gldc, Gls2, Gm4952, Gnmt, Gpt, Gys2, Hal, Hsd17b13, Hsd17b6, Igfals, Igfbp2, Maob, Mat1a, Mug2, Pbld2, Pck1, Pecr, Pxmp2, Sds, Serpina1c, Slc17a2, Slc22a7, Slc27a5, Slc30a10, Slc38a4, Slco2b1, Srd5a1, Tat, Tdo2, Tmem86b, Uox, Uroc1
+
+hepatocyte_pericentral_landmark_genes=read.table('/data5/wangxin/20220411monkey_liver/sc/public_data/20220602_Cell_Stem_Cell_APAP_mouse_liver/hepatocyte_pericentral_landmark_genes',sep='\t')
+hepatocyte_periportal_landmark_genes=read.table('/data5/wangxin/20220411monkey_liver/sc/public_data/20220602_Cell_Stem_Cell_APAP_mouse_liver/hepatocyte_periportal_landmark_genes',sep='\t')
+#文章是小鼠基因，先转为大写变成人/非人灵长类中特异的
+hepatocyte_pericentral_landmark_genes$V1=toupper(hepatocyte_pericentral_landmark_genes$V1)
+hepatocyte_periportal_landmark_genes$V1=toupper(hepatocyte_periportal_landmark_genes$V1)
+
+#首先寻找这些基因在snRNA-seq中捕获到的基因
+seurat_genes <- rownames(hepa@assays$RNA@counts)
+exist_hepatocyte_pericentral_landmark_genes=hepatocyte_pericentral_landmark_genes$V1[hepatocyte_pericentral_landmark_genes$V1 %in% seurat_genes]
+exist_hepatocyte_periportal_landmark_genes=hepatocyte_periportal_landmark_genes$V1[hepatocyte_periportal_landmark_genes$V1 %in% seurat_genes]
+
+#### 使用文献中经典的肝小叶分区landmark genes或替换成如上的肝细胞分区基因
+## ref:单核，单细胞小鼠单细胞测序数据比较分析文章
+pericentral_zonation_genes=c('CYP3A4','ADH4','GLUL','BCHE','CYP1A2','OAT','GS','CYP2E1','CYP1A2','RSPO3','WNT9B')
+periportal_zonation_genes=c('CYP2F2','HAL','SDS','CPS1','HMGCS1','SERPINA1','TTR','APOA1','APOC3','HAL','CPS1','HMGCS1','GLS2','ARG1.2')
+exist_hepatocyte_pericentral_landmark_genes = pericentral_zonation_genes[pericentral_zonation_genes %in% seurat_genes]
+exist_hepatocyte_periportal_landmark_genes = periportal_zonation_genes[periportal_zonation_genes %in% seurat_genes]
+
+#两步归一化处理之step1:
+#提取这些landmark基因在每个hepatocyte中的count数
+exist_hepatocyte_pericentral_landmark_genes_hepatocyte_count=hepa@assays$RNA@counts[exist_hepatocyte_pericentral_landmark_genes,]
+exist_hepatocyte_periportal_landmark_genes_hepatocyte_count=hepa@assays$RNA@counts[exist_hepatocyte_periportal_landmark_genes,]
+#两步归一化处理之step2:
+#scaling:
+#filter_singlet_raw_combine_QC2_hepatocyte@assayes$RNA@scale.data中只为2000个gene的scale.data,需要对所有基因进行scale处理
+hepatocyte_scale_data=scale(hepa@assays$RNA@data, center = FALSE, scale = TRUE)
+
+#计算每个细胞的zonation coordinate=pLM/(cLM+pLM)
+#提取所有exist pericentral 与periportal gene sets的scale.data矩阵
+exist_hepatocyte_pericentral_landmark_genes_hepatocyte_scale_data=hepatocyte_scale_data[exist_hepatocyte_pericentral_landmark_genes,]
+exist_hepatocyte_periportal_landmark_genes_hepatocyte_scale_data=hepatocyte_scale_data[exist_hepatocyte_periportal_landmark_genes,]
+
+#计算每个细胞中的pLM,cLM,以及zonal coordinate
+each_hepatocyte_cLM=colSums(exist_hepatocyte_pericentral_landmark_genes_hepatocyte_scale_data)
+each_hepatocyte_pLM=colSums(exist_hepatocyte_periportal_landmark_genes_hepatocyte_scale_data)
+each_hepatocyte_cpLM=each_hepatocyte_cLM + each_hepatocyte_pLM
+each_hepatocyte_coordinate=each_hepatocyte_pLM/each_hepatocyte_cpLM
+
+#将计算的zonal coordinate添加到filter_singlet_raw_combine_QC2_hepatocyte元信息中
+hepa$zonal_coordinate=0
+hepa$zonal_coordinate=each_hepatocyte_coordinate
+
+#根据each_hepatocyte_coordinate的最大值与最小值进行三个肝小叶分区：periportal,mid-lobule,pericentral(peri-necrotic)
+#提取并去除scale.data值为NaN的细胞
+#nan_hepatocyte_info=subset(hepa@meta.data,hepa@meta.data$zonal_coordinate=='NaN')
+hepa$zonal_coordinate_judge=0
+hepa$zonal_coordinate_judge[hepa$zonal_coordinate=='NaN']='nan'
+saveRDS(hepa,file='/data5/wangxin/20220411monkey_liver/sc/rds/sn_rna_rds/monkey2/monkey2_hepa2.rds')
+
+Idents(hepa)='zonal_coordinate_judge'
+non_nan_hepatocyte_hepa=subset(hepa,idents='0')
+saveRDS(non_nan_hepatocyte_hepa,file='/data5/wangxin/20220411monkey_liver/sc/rds/sn_rna_rds/monkey2/monkey2_hepa2_non_nan_zonal_coordinate.rds')
+
+#max(each_hepatocyte_coordinate)
+#min(each_hepatocyte_coordinate)
+max(non_nan_hepatocyte_hepa@meta.data$zonal_coordinate)
+min(non_nan_hepatocyte_hepa@meta.data$zonal_coordinate)
+
+#统计所有hepatocyte中zonal coordinate的分布
+p1 <- ggplot(non_nan_hepatocyte_hepa@meta.data,aes(x=non_nan_hepatocyte_hepa@meta.data$zonal_coordinate))+
+      geom_histogram(fill='black',color='black',binwidth=0.005)+xlab('zonal_coordinate')+ylab('num')+ggtitle('distribution of zonal coordinate')+
+      theme(axis.title.x = element_text(size=12),axis.title.y=element_text(size = 12),axis.text.y = element_text(size = 12),axis.text.x = element_text(size = 12),
+      plot.title=element_text(hjust=0.5,size=15))+scale_color_manual(values=c('black'))
+
+#可视化所有肝细胞的lonule zonal coordinate
+p1 <- FeaturePlot(non_nan_hepatocyte_hepa,features='zonal_coordinate',cols=c('#FF3300','#FFCC00','#99FF00','#00FFCC','#0066FF'))
+ggsave(p1,file='',width=5,height=5)
+
+#统计不同肝切再生时间点的肝细胞分区分布，是否有差异
+#考虑：是否需要先提出每个肝切再生时间点的肝细胞seurat对象，在每个时间点的肝细胞seurat中进行scale
+non_hepa <- non_nan_hepatocyte_hepa
+Idents(non_hepa) <- 'monkey_id'
+monkey1_non_hepa <- subset(non_hepa,idents='monkey1')
+monkey2_non_hepa <- subset(non_hepa,idents='monkey2')
+monkey1_non_hepa_sample_list <- list()
+monkey2_non_hepa_sample_list <- list()
+monkey1_sample_seq <- c('monkey1_d0','monkey1_d3','monkey1_d7','monkey1_d14','monkey1_d28','monkey1_d200')
+monkey2_sample_seq <- c('monkey2_d0','monkey2_d3','monkey2_d9','monkey2_d19','monkey2_d38','monkey2_d60')
+Idents(monkey1_non_hepa) <- 'sample'
+Idents(monkey2_non_hepa) <- 'sample'
+for (i in 1:6){
+monkey1_non_hepa_sample_list[[i]] <- subset(monkey1_non_hepa,idents=monkey1_sample_seq[[i]])
+print(monkey1_sample_seq[[i]])
+monkey2_non_hepa_sample_list[[i]] <- subset(monkey2_non_hepa,idents=monkey2_sample_seq[[i]])
+print(monkey2_sample_seq[[i]])
+}
+
+## 整体的不同再生时间点的肝细胞的分区变化特征分布山脊图
+p1 <- RidgePlot(non_hepa,features='zonal_coordinate',group.by='sample')
+ggsave(p1,file='/data5/wangxin/20220411monkey_liver/sc/inter_pdf/snrna_2monkeys_12samples_CCA_hepa_zone_zonal_coordinate_distibution_sample_ridgeplot.pdf',width=8,height=6)
+
+
+## 单个的不同再生时间点的肝细胞的分区分布
+#分别绘制每个肝切再生时间点hepatocyte的zonal coordinate分布
+# two monkeys:
+# monkey1:
+for (i in 1:6){
+p1 <- ggplot(monkey1_non_hepa_sample_list[[i]]@meta.data,aes(x=monkey1_non_hepa_sample_list[[i]]@meta.data$zonal_coordinate))+geom_histogram(fill='black',color='black',binwidth=0.005)+xlab('zonal_coordinate')+ylab('num')+ggtitle(str_c('distribution of zonal coordinate of',monkey1_sample_seq[[i]]))+theme(axis.title.x = element_text(size=12),axis.title.y=element_text(size = 12),axis.text.y = element_text(size = 12),axis.text.x = element_text(size = 12),plot.title=element_text(hjust=0.5,size=15))+scale_color_manual(values=c('black'))+expand_limits(x=c(0,1))
+print(i)
+ggsave(p1,file=str_c('/data5/wangxin/20220411monkey_liver/sc/inter_pdf/snrna_2monkeys_12samples_CCA_hepa_zone_',monkey1_sample_seq[[i]],'_zonal_coordiate_distribution.pdf'),width=8,height=5)
+}
+
+# monkey2:
+for (i in 1:6){
+p2 <- ggplot(monkey2_non_hepa_sample_list[[i]]@meta.data,aes(x=monkey2_non_hepa_sample_list[[i]]@meta.data$zonal_coordinate))+geom_histogram(fill='black',color='black',binwidth=0.005)+xlab('zonal_coordinate')+ylab('num')+ggtitle(str_c('distribution of zonal coordinate of',monkey2_sample_seq[[i]]))+theme(axis.title.x = element_text(size=12),axis.title.y=element_text(size = 12),axis.text.y = element_text(size = 12),axis.text.x = element_text(size = 12),plot.title=element_text(hjust=0.5,size=15))+scale_color_manual(values=c('black'))+expand_limits(x=c(0,1))
+print(i)
+ggsave(p2,file=str_c('/data5/wangxin/20220411monkey_liver/sc/inter_pdf/snrna_2monkeys_12samples_CCA_hepa_zone_',monkey2_sample_seq[[i]],'_zonal_coordiate_distribution.pdf'),width=8,height=5)
+}
 
